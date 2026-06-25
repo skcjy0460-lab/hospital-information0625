@@ -18,7 +18,6 @@ create table if not exists hospitals (
     photo_url_2 text,
     main_specialty text,
     special_features text,
-    feature_highlights text,
     hotline_phone text not null,
     hotline_note text,
     is_active boolean not null default true,
@@ -113,21 +112,3 @@ on business_hours for select
 using (
   exists (select 1 from hospitals h where h.id = business_hours.hospital_id and h.is_active = true)
 );
-
--- ---------------------------------------------------------------------
--- 5. 광고 배너 (환자 화면 상단 자동 순환 노출)
--- ---------------------------------------------------------------------
-create table if not exists ad_banners (
-    id uuid primary key default gen_random_uuid(),
-    image_url text not null,
-    link_url text,
-    display_order int not null default 0,
-    is_active boolean not null default true,
-    created_at timestamptz not null default now()
-);
-
-alter table ad_banners enable row level security;
-
-create policy "public_select_active_banners"
-on ad_banners for select
-using (is_active = true);
