@@ -15,10 +15,8 @@ import pandas as pd
 import streamlit as st
 
 import db
-import public_data_helper
-from ai_helper import standardize_departments, extract_hospital_info_from_text
+from ai_helper import standardize_departments
 from constants import DAYS_OF_WEEK, SIDO_LIST, STAFF_POSITIONS, STANDARD_DEPARTMENTS
-from excel_helper import generate_excel_template
 from image_utils import process_uploaded_image
 
 st.set_page_config(page_title="관리자 - 병원 정보 관리", page_icon="🔐", layout="wide")
@@ -295,116 +293,13 @@ def render_hours_section(key_prefix: str, initial_hours=None):
 # ---------------------------------------------------------------------------
 # 탭 구성
 # ---------------------------------------------------------------------------
-tab_new, tab_excel, tab_edit, tab_list, tab_banner = st.tabs(
-    ["➕ 신규 병원 등록", "📁 엑셀 일괄 등록", "✏️ 병원 수정 / 삭제", "📋 전체 등록 현황", "📢 광고 배너 관리"]
+tab_new, tab_edit, tab_list, tab_banner = st.tabs(
+    ["➕ 신규 병원 등록", "✏️ 병원 수정 / 삭제", "📋 전체 등록 현황", "📢 광고 배너 관리"]
 )
 
 # --- 신규 등록 -------------------------------------------------------------
 with tab_new:
     st.subheader("신규 병원 등록")
-
-    # ----- 보조 입력 1: 공공데이터(HIRA)에서 자동으로 가져오기 -----
-    with st.expander("🔎 공공데이터에서 병원정보 자동으로 가져오기 (선택)", expanded=False):
-        st.caption(
-            "건강보험심사평가원 공공데이터에서 병원명으로 검색해 주소/전화번호/진료과목을 "
-            "자동으로 채울 수 있습니다. (HIRA_API_KEY가 secrets에 설정되어 있어야 합니다)"
-        )
-        hira_search_name = st.text_input("병원명으로 검색", key="hira_search_name")
-        if st.button("검색", key="hira_search_btn"):
-            if not hira_search_name.strip():
-                st.warning("병원명을 입력해주세요.")
-            else:
-                try:
-                    with st.spinner("공공데이터에서 검색 중입니다..."):
-                        results = public_data_helper.search_hospital_basis(hira_search_name.strip())
-                    st.session_state["hira_search_results"] = results
-                    if not results:
-                        st.info("검색 결과가 없습니다. 병원명을 다르게 입력해보세요.")
-                except Exception as e:
-                    st.error(f"공공데이터 조회 중 오류가 발생했습니다: {e}")
-
-        hira_results = st.session_state.get("hira_search_results", [])
-        if hira_results:
-            hira_options = {
-                f"{r.get('yadmNm')} - {r.get('addr')} ({r.get('telno') or '전화번호 없음'})": r
-                for r in hira_results
-            }
-            hira_pick_label = st.selectbox(
-                "검색 결과에서 선택", list(hira_options.keys()), key="hira_search_pick"
-            )
-            if st.button("✅ 이 정보로 자동 채우기", type="primary", key="hira_apply_btn"):
-                picked = hira_options[hira_pick_label]
-                sido_guess = (picked.get("sidoCdNm") or "").strip()
-                matched_sido = next(
-                    (s for s in SIDO_LIST if sido_guess and (sido_guess in s or s in sido_guess)),
-                    None,
-                )
-
-                st.session_state["new_name"] = picked.get("yadmNm", "") or ""
-                if matched_sido:
-                    st.session_state["new_sido"] = matched_sido
-                st.session_state["new_sigungu"] = picked.get("sgguCdNm", "") or ""
-                st.session_state["new_address"] = picked.get("addr", "") or ""
-                st.session_state["new_hotline"] = picked.get("telno", "") or ""
-
-                try:
-                    with st.spinner("진료과목 정보도 가져오는 중입니다..."):
-                        depts = public_data_helper.fetch_hospital_departments(picked.get("ykiho", ""))
-                    if depts:
-                        st.session_state["new_dept_raw"] = ", ".join(depts)
-                except Exception:
-                    pass  # 진료과목 조회 실패해도 기본정보는 그대로 적용
-
-                st.session_state.pop("hira_search_results", None)
-                st.success("기본정보를 채웠습니다. 아래 양식에서 확인 후 저장해주세요.")
-                st.rerun()
-
-    # ----- 보조 입력 2: 텍스트 붙여넣기 -> AI 자동분류 -----
-    with st.expander("📋 텍스트 붙여넣기로 AI 자동분류 (선택)", expanded=False):
-        st.caption(
-            "병원 홈페이지나 네이버 플레이스 페이지 내용을 복사해서 붙여넣으면, "
-            "AI가 이름/주소/진료과/특징 등을 자동으로 분류해서 채워줍니다. "
-            "(추출 결과는 반드시 한 번 확인해주세요)"
-        )
-        ai_paste_text = st.text_area(
-            "병원 정보 텍스트 붙여넣기", height=150, key="ai_paste_text",
-            placeholder="병원 홈페이지나 네이버 플레이스 내용을 그대로 복사해서 붙여넣어주세요.",
-        )
-        if st.button("🤖 AI로 자동분류", key="ai_paste_btn"):
-            if not ai_paste_text.strip():
-                st.warning("텍스트를 먼저 붙여넣어주세요.")
-            else:
-                with st.spinner("AI가 텍스트를 분석하는 중입니다..."):
-                    extracted = extract_hospital_info_from_text(ai_paste_text)
-
-                if extracted:
-                    if extracted.get("name"):
-                        st.session_state["new_name"] = extracted["name"]
-                    if extracted.get("sido") in SIDO_LIST:
-                        st.session_state["new_sido"] = extracted["sido"]
-                    if extracted.get("sigungu"):
-                        st.session_state["new_sigungu"] = extracted["sigungu"]
-                    if extracted.get("address"):
-                        st.session_state["new_address"] = extracted["address"]
-                    if extracted.get("main_specialty"):
-                        st.session_state["new_main_spec"] = extracted["main_specialty"]
-                    if extracted.get("special_features"):
-                        st.session_state["new_special"] = extracted["special_features"]
-                    if extracted.get("hotline_phone"):
-                        st.session_state["new_hotline"] = extracted["hotline_phone"]
-                    if extracted.get("hotline_note"):
-                        st.session_state["new_hotline_note"] = extracted["hotline_note"]
-                    depts = extracted.get("departments") or []
-                    if depts:
-                        st.session_state["new_dept_raw"] = ", ".join(depts)
-                    features = extracted.get("feature_highlights") or []
-                    if features:
-                        st.session_state["new_feature_highlights"] = "\n".join(features)
-
-                    st.success("AI 추출 결과를 채웠습니다. 아래 양식에서 꼭 확인 후 저장해주세요.")
-                    st.rerun()
-
-    st.divider()
     basic = render_basic_info_section("new")
     st.divider()
     dept_rows = render_department_section("new")
@@ -461,111 +356,6 @@ with tab_new:
                 st.balloons()
             except Exception as e:
                 st.error(f"등록 중 오류가 발생했습니다: {e}")
-
-# --- 엑셀 일괄 등록 ----------------------------------------------------------
-with tab_excel:
-    st.subheader("엑셀 일괄 등록")
-    st.caption(
-        "여러 병원의 기본정보(이름/지역/진료과/핫라인 등)를 엑셀로 한 번에 등록합니다. "
-        "**의료진 명단 / 진료시간 / 사진은 일괄 등록 후 '병원 수정 / 삭제' 탭에서 "
-        "병원별로 추가해주세요.** (한 번에 처리하기 까다로운 항목이라 분리했습니다)"
-    )
-
-    st.download_button(
-        "📥 엑셀 양식 다운로드",
-        data=generate_excel_template(),
-        file_name="병원_일괄등록_양식.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="excel_template_download",
-    )
-
-    apply_ai_standardize = st.checkbox(
-        "진료과목에 AI 표준화 자동 적용 (권장)", value=True, key="excel_ai_std",
-        help="끄면 엑셀에 입력한 진료과목 텍스트를 그대로(쉼표 단위로만 분리해서) 저장합니다.",
-    )
-
-    excel_file = st.file_uploader("작성한 엑셀 파일 업로드 (.xlsx)", type=["xlsx"], key="excel_upload")
-
-    if excel_file is not None:
-        try:
-            preview_df = pd.read_excel(excel_file)
-        except Exception as e:
-            st.error(f"엑셀 파일을 읽는 중 오류가 발생했습니다: {e}")
-            preview_df = None
-
-        if preview_df is not None:
-            st.markdown(f"**{len(preview_df)}개 행을 발견했습니다. 미리보기:**")
-            st.dataframe(preview_df, use_container_width=True, hide_index=True)
-
-            if st.button("✅ 일괄 등록 시작", type="primary", key="excel_submit"):
-                required_cols = ["병원명", "시도", "메인진료과목", "핫라인전화"]
-                missing_cols = [c for c in required_cols if c not in preview_df.columns]
-
-                if missing_cols:
-                    st.error(
-                        f"필수 열이 없습니다: {', '.join(missing_cols)} "
-                        "— 다운로드한 양식의 열 이름을 그대로 사용해주세요."
-                    )
-                else:
-                    progress = st.progress(0)
-                    status = st.empty()
-                    success_count = 0
-                    error_rows = []
-                    total = len(preview_df)
-
-                    for i, row in preview_df.iterrows():
-                        try:
-                            name = str(row.get("병원명") or "").strip()
-                            sido = str(row.get("시도") or "").strip()
-                            hotline = str(row.get("핫라인전화") or "").strip()
-                            main_spec = str(row.get("메인진료과목") or "").strip()
-
-                            if not name or not sido or not hotline or not main_spec:
-                                error_rows.append((i + 2, "필수값 누락 (병원명/시도/메인진료과목/핫라인전화)"))
-                                continue
-                            if sido not in SIDO_LIST:
-                                error_rows.append((i + 2, f"'시도' 값이 올바르지 않습니다: {sido}"))
-                                continue
-
-                            hospital_data = {
-                                "name": name,
-                                "sido": sido,
-                                "sigungu": str(row.get("시군구") or "").strip(),
-                                "address": str(row.get("주소") or "").strip(),
-                                "main_specialty": main_spec,
-                                "special_features": str(row.get("특정과_특화진료") or "").strip(),
-                                "hotline_phone": hotline,
-                                "hotline_note": str(row.get("핫라인안내문구") or "").strip(),
-                                "feature_highlights": str(row.get("병원특징(세미콜론구분)") or "")
-                                    .replace(";", "\n").strip(),
-                            }
-                            hospital_id = db.create_hospital(hospital_data)
-
-                            dept_raw = str(row.get("진료과목(쉼표구분)") or "").strip()
-                            if dept_raw:
-                                if apply_ai_standardize:
-                                    dept_result = standardize_departments(dept_raw)
-                                else:
-                                    dept_result = [
-                                        {"raw": d.strip(), "standardized": d.strip(), "is_custom": True}
-                                        for d in dept_raw.split(",") if d.strip()
-                                    ]
-                                db.replace_departments(hospital_id, dept_result)
-
-                            success_count += 1
-                        except Exception as row_err:
-                            error_rows.append((i + 2, str(row_err)))
-
-                        progress.progress((i + 1) / total)
-                        status.text(f"{i + 1}/{total} 처리 중...")
-
-                    status.empty()
-                    progress.empty()
-                    st.success(f"✅ {success_count}개 병원이 등록되었습니다.")
-                    if error_rows:
-                        st.warning(f"⚠️ {len(error_rows)}개 행에서 문제가 발생했습니다 (엑셀 행 번호 기준):")
-                        for row_num, err in error_rows:
-                            st.caption(f"- {row_num}행: {err}")
 
 # --- 수정 / 삭제 ------------------------------------------------------------
 with tab_edit:
